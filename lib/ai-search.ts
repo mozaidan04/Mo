@@ -36,7 +36,13 @@ const SYSTEM_PROMPT = `أنت مساعد بحث داخل مكتبة فتاوى �
 - اكتب بالعربية الفصحى الواضحة والموجزة.`;
 
 function client(): Anthropic {
-  return new Anthropic({ timeout: 60_000, maxRetries: 1 });
+  // المفاتيح المرتبطة بهوية (identity-linked) تشترط تحديد مساحة العمل في كل طلب.
+  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
+  return new Anthropic({
+    timeout: 60_000,
+    maxRetries: 1,
+    defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
+  });
 }
 
 export function isAiSearchEnabled(): boolean {

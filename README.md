@@ -61,6 +61,7 @@ npm run dev
 | `NEXT_PUBLIC_SUPABASE_URL` | رابط مشروع Supabase. **مطلوب** |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | المفتاح العام (publishable). **مطلوب** |
 | `ANTHROPIC_API_KEY` | يفعّل البحث بالذكاء الاصطناعي. بدونه يعمل البحث النصي وحده. |
+| `ANTHROPIC_WORKSPACE_ID` | مطلوب فقط إن كان المفتاح مرتبطًا بهوية (identity-linked)، ويبدأ بـ `wrkspc_`. |
 
 ## قاعدة البيانات
 
