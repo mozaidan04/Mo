@@ -80,7 +80,7 @@ export default function FatwaForm({ action, categories, fatwa, suggestedNumber, 
       <CheckboxField
         label="نشر الفتوى"
         name="published"
-        defaultChecked={fatwa ? Boolean(fatwa.published) : true}
+        defaultChecked={fatwa ? fatwa.published : true}
         hint="الفتاوى غير المنشورة لا تظهر للزوار ولا في نتائج البحث"
       />
     </AdminForm>

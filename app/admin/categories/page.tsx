@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminCategoriesPage() {
   await requireAdmin();
-  const categories = listCategories();
+  const categories = await listCategories();
 
   return (
     <div className="space-y-6">

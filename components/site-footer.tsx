@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { getSettings } from "@/lib/data";
 
-export default function SiteFooter() {
-  const settings = getSettings();
+export default async function SiteFooter() {
+  const settings = await getSettings();
 
   return (
     <footer className="no-print mt-16 border-t border-line bg-surface">
@@ -16,6 +16,7 @@ export default function SiteFooter() {
           <ul className="space-y-1 text-muted">
             <li><Link className="hover:text-primary" href="/categories">تصنيفات الفتاوى</Link></li>
             <li><Link className="hover:text-primary" href="/saved">الفتاوى المحفوظة</Link></li>
+            <li><Link className="hover:text-primary" href="/login">حسابي</Link></li>
             <li><Link className="hover:text-primary" href="/sheikh">نبذة عن الشيخ</Link></li>
             <li><Link className="hover:text-primary" href="/books">مؤلفات الشيخ</Link></li>
           </ul>

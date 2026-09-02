@@ -1,213 +1,217 @@
 import "server-only";
-import { db } from "./db";
-import { indexFatwa, removeFatwaFromIndex } from "./index-fts";
-import { normalizeArabic, slugify, tokenize } from "./arabic";
-import type { Book, Category, CategoryWithCount, Fatwa, FatwaWithCategory } from "./types";
+import { cache } from "react";
+import { createClient } from "./supabase/server";
+import { slugify } from "./arabic";
+import type { Book, Category, CategoryWithCount, FatwaWithCategory } from "./types";
 
-const FATWA_SELECT = `
-  SELECT f.*, c.name AS category_name, c.slug AS category_slug
-  FROM fatwas f
-  LEFT JOIN categories c ON c.id = f.category_id
-`;
+/** صف الفتوى كما يعيده PostgREST مع التصنيف المرتبط. */
+type FatwaRow = Omit<FatwaWithCategory, "category_name" | "category_slug"> & {
+  categories?: { name: string; slug: string } | null;
+};
+
+const FATWA_COLUMNS =
+  "id, number, slug, title, question, answer, category_id, audio_url, audio_label," +
+  " audio_duration, audio_path, source, tags, published, views, created_at, updated_at";
+
+const FATWA_SELECT = `${FATWA_COLUMNS}, categories (name, slug)`;
+
+function mapFatwa(row: FatwaRow): FatwaWithCategory {
+  const { categories, ...fatwa } = row;
+  return {
+    ...fatwa,
+    category_name: categories?.name ?? null,
+    category_slug: categories?.slug ?? null,
+  };
+}
 
 /* ------------------------------- التصنيفات ------------------------------- */
 
-export function listCategories(): CategoryWithCount[] {
-  return db()
-    .prepare(
-      `SELECT c.*, (
-         SELECT COUNT(*) FROM fatwas f WHERE f.category_id = c.id AND f.published = 1
-       ) AS fatwa_count
-       FROM categories c
-       ORDER BY c.sort_order ASC, c.name ASC`,
-    )
-    .all() as CategoryWithCount[];
+export const listCategories = cache(async (): Promise<CategoryWithCount[]> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("categories")
+    .select("*, fatwas (count)")
+    .order("sort_order", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (error) throw new Error(`تعذّر جلب التصنيفات: ${error.message}`);
+
+  return (data ?? []).map((row) => {
+    const { fatwas, ...category } = row as Category & { fatwas?: Array<{ count: number }> };
+    return { ...category, fatwa_count: fatwas?.[0]?.count ?? 0 };
+  });
+});
+
+export async function getCategoryBySlug(slug: string): Promise<Category | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("categories").select("*").eq("slug", slug).maybeSingle();
+  if (error) throw new Error(`تعذّر جلب التصنيف: ${error.message}`);
+  return data;
 }
 
-export function getCategoryBySlug(slug: string): Category | null {
-  return (db().prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Category) ?? null;
-}
-
-export function createCategory(input: {
+export async function createCategory(input: {
   name: string;
   slug?: string;
   description?: string;
   icon?: string;
   sort_order?: number;
-}): number {
-  const slug = uniqueCategorySlug(input.slug?.trim() || slugify(input.name, "category"));
-  const result = db()
-    .prepare(
-      `INSERT INTO categories (name, slug, description, icon, sort_order)
-       VALUES (@name, @slug, @description, @icon, @sort_order)`,
-    )
-    .run({
-      name: input.name.trim(),
-      slug,
-      description: input.description?.trim() ?? "",
-      icon: input.icon?.trim() ?? "",
-      sort_order: input.sort_order ?? 0,
-    });
-  return Number(result.lastInsertRowid);
+}): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("categories").insert({
+    name: input.name.trim(),
+    slug: input.slug?.trim() || slugify(input.name, "category"),
+    description: input.description?.trim() ?? "",
+    icon: input.icon?.trim() ?? "",
+    sort_order: input.sort_order ?? 0,
+  });
+  if (error) throw new Error(`تعذّر إضافة التصنيف: ${error.message}`);
 }
 
-export function updateCategory(
+export async function updateCategory(
   id: number,
   input: { name: string; slug: string; description?: string; icon?: string; sort_order?: number },
-): void {
-  db()
-    .prepare(
-      `UPDATE categories
-       SET name = @name, slug = @slug, description = @description, icon = @icon, sort_order = @sort_order
-       WHERE id = @id`,
-    )
-    .run({
-      id,
+): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("categories")
+    .update({
       name: input.name.trim(),
       slug: input.slug.trim(),
       description: input.description?.trim() ?? "",
       icon: input.icon?.trim() ?? "",
       sort_order: input.sort_order ?? 0,
-    });
+    })
+    .eq("id", id);
+  if (error) throw new Error(`تعذّر حفظ التصنيف: ${error.message}`);
 }
 
-export function deleteCategory(id: number): void {
-  db().prepare("DELETE FROM categories WHERE id = ?").run(id);
+export async function deleteCategory(id: number): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("categories").delete().eq("id", id);
+  if (error) throw new Error(`تعذّر حذف التصنيف: ${error.message}`);
 }
 
-export function isCategorySlugTaken(slug: string, ignoreId?: number): boolean {
-  const row = db()
-    .prepare("SELECT id FROM categories WHERE slug = ? AND id != ?")
-    .get(slug, ignoreId ?? 0);
-  return Boolean(row);
+export async function isCategoryNameTaken(name: string, ignoreId?: number): Promise<boolean> {
+  const supabase = await createClient();
+  const query = supabase.from("categories").select("id").eq("name", name.trim());
+  const { data } = ignoreId ? await query.neq("id", ignoreId) : await query;
+  return (data ?? []).length > 0;
 }
 
-export function isCategoryNameTaken(name: string, ignoreId?: number): boolean {
-  const row = db()
-    .prepare("SELECT id FROM categories WHERE name = ? AND id != ?")
-    .get(name, ignoreId ?? 0);
-  return Boolean(row);
-}
-
-function uniqueCategorySlug(base: string, ignoreId?: number): string {
-  const exists = db().prepare(
-    "SELECT id FROM categories WHERE slug = ? AND (? IS NULL OR id != ?)",
-  );
-  let slug = base;
-  let n = 2;
-  while (exists.get(slug, ignoreId ?? null, ignoreId ?? 0)) slug = `${base}-${n++}`;
-  return slug;
+export async function isCategorySlugTaken(slug: string, ignoreId?: number): Promise<boolean> {
+  const supabase = await createClient();
+  const query = supabase.from("categories").select("id").eq("slug", slug.trim());
+  const { data } = ignoreId ? await query.neq("id", ignoreId) : await query;
+  return (data ?? []).length > 0;
 }
 
 /* -------------------------------- الفتاوى -------------------------------- */
 
-export function listFatwas(options: {
+type ListOptions = {
   categorySlug?: string;
   includeUnpublished?: boolean;
   limit?: number;
   offset?: number;
   search?: string;
-} = {}): FatwaWithCategory[] {
-  const where: string[] = [];
-  const params: Record<string, unknown> = {};
+};
 
-  if (!options.includeUnpublished) where.push("f.published = 1");
-  if (options.categorySlug) {
-    where.push("c.slug = @categorySlug");
-    params.categorySlug = options.categorySlug;
-  }
-  if (options.search?.trim()) {
-    where.push("(f.title LIKE @like OR f.question LIKE @like OR CAST(f.number AS TEXT) LIKE @like)");
-    params.like = `%${options.search.trim()}%`;
-  }
-
-  const sql = `${FATWA_SELECT}
-    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-    ORDER BY f.number DESC
-    LIMIT @limit OFFSET @offset`;
-
-  return db()
-    .prepare(sql)
-    .all({ ...params, limit: options.limit ?? 20, offset: options.offset ?? 0 }) as FatwaWithCategory[];
+/** شروط البحث النصي في لوحة التحكم (عنوان أو سؤال أو رقم). */
+function searchClauses(search: string): string {
+  const cleaned = search.replace(/[,()*%]/g, " ").trim();
+  const asNumber = Number(cleaned);
+  const clauses = [`title.ilike.*${cleaned}*`, `question.ilike.*${cleaned}*`];
+  if (Number.isInteger(asNumber) && asNumber > 0) clauses.push(`number.eq.${asNumber}`);
+  return clauses.join(",");
 }
 
-export function countFatwas(options: {
-  categorySlug?: string;
-  includeUnpublished?: boolean;
-  search?: string;
-} = {}): number {
-  const where: string[] = [];
-  const params: Record<string, unknown> = {};
-  if (!options.includeUnpublished) where.push("f.published = 1");
-  if (options.categorySlug) {
-    where.push("c.slug = @categorySlug");
-    params.categorySlug = options.categorySlug;
-  }
-  if (options.search?.trim()) {
-    where.push("(f.title LIKE @like OR f.question LIKE @like OR CAST(f.number AS TEXT) LIKE @like)");
-    params.like = `%${options.search.trim()}%`;
-  }
-  const row = db()
-    .prepare(
-      `SELECT COUNT(*) AS total FROM fatwas f
-       LEFT JOIN categories c ON c.id = f.category_id
-       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`,
-    )
-    .get(params) as { total: number };
-  return row.total;
+export async function listFatwas(options: ListOptions = {}): Promise<FatwaWithCategory[]> {
+  const supabase = await createClient();
+  const join = options.categorySlug ? "categories!inner (name, slug)" : "categories (name, slug)";
+  const limit = options.limit ?? 20;
+  const offset = options.offset ?? 0;
+
+  let query = supabase.from("fatwas").select(`${FATWA_COLUMNS}, ${join}`);
+  if (!options.includeUnpublished) query = query.eq("published", true);
+  if (options.categorySlug) query = query.eq("categories.slug", options.categorySlug);
+  if (options.search?.trim()) query = query.or(searchClauses(options.search));
+
+  const { data, error } = await query
+    .order("number", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) throw new Error(`تعذّر جلب الفتاوى: ${error.message}`);
+  return (data as unknown as FatwaRow[]).map(mapFatwa);
 }
 
-export function getFatwaByNumber(number: number, includeUnpublished = false): FatwaWithCategory | null {
-  const row = db()
-    .prepare(`${FATWA_SELECT} WHERE f.number = ? ${includeUnpublished ? "" : "AND f.published = 1"}`)
-    .get(number) as FatwaWithCategory | undefined;
-  return row ?? null;
+export async function countFatwas(options: ListOptions = {}): Promise<number> {
+  const supabase = await createClient();
+  const join = options.categorySlug ? "categories!inner (slug)" : "categories (slug)";
+  let query = supabase.from("fatwas").select(`id, ${join}`, { count: "exact", head: true });
+  if (!options.includeUnpublished) query = query.eq("published", true);
+  if (options.categorySlug) query = query.eq("categories.slug", options.categorySlug);
+  if (options.search?.trim()) query = query.or(searchClauses(options.search));
+
+  const { count, error } = await query;
+  if (error) throw new Error(`تعذّر حساب عدد الفتاوى: ${error.message}`);
+  return count ?? 0;
 }
 
-export function getFatwaById(id: number): FatwaWithCategory | null {
-  const row = db().prepare(`${FATWA_SELECT} WHERE f.id = ?`).get(id) as FatwaWithCategory | undefined;
-  return row ?? null;
+export async function getFatwaByNumber(
+  number: number,
+  includeUnpublished = false,
+): Promise<FatwaWithCategory | null> {
+  const supabase = await createClient();
+  let query = supabase.from("fatwas").select(FATWA_SELECT).eq("number", number);
+  if (!includeUnpublished) query = query.eq("published", true);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(`تعذّر جلب الفتوى: ${error.message}`);
+  return data ? mapFatwa(data as unknown as FatwaRow) : null;
 }
 
-export function getFatwasByNumbers(numbers: number[]): FatwaWithCategory[] {
-  if (numbers.length === 0) return [];
-  const placeholders = numbers.map(() => "?").join(",");
-  return db()
-    .prepare(`${FATWA_SELECT} WHERE f.number IN (${placeholders}) AND f.published = 1`)
-    .all(...numbers) as FatwaWithCategory[];
+export async function getFatwaById(id: number): Promise<FatwaWithCategory | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("fatwas").select(FATWA_SELECT).eq("id", id).maybeSingle();
+  if (error) throw new Error(`تعذّر جلب الفتوى: ${error.message}`);
+  return data ? mapFatwa(data as unknown as FatwaRow) : null;
 }
 
-export function incrementFatwaViews(id: number): void {
-  db().prepare("UPDATE fatwas SET views = views + 1 WHERE id = ?").run(id);
+export async function incrementFatwaViews(number: number): Promise<void> {
+  const supabase = await createClient();
+  await supabase.rpc("increment_fatwa_views", { p_number: number });
 }
 
-/** أعلى رقم فتوى مستخدم + 1، لاقتراح رقم للفتوى الجديدة. */
-export function nextFatwaNumber(): number {
-  const row = db().prepare("SELECT MAX(number) AS max FROM fatwas").get() as { max: number | null };
-  return (row.max ?? 1000) + 1;
+export async function nextFatwaNumber(): Promise<number> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("fatwas")
+    .select("number")
+    .order("number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data?.number ?? 1000) + 1;
 }
 
-export function isFatwaNumberTaken(number: number, ignoreId?: number): boolean {
-  const row = db()
-    .prepare("SELECT id FROM fatwas WHERE number = ? AND id != ?")
-    .get(number, ignoreId ?? 0);
-  return Boolean(row);
+export async function isFatwaNumberTaken(number: number, ignoreId?: number): Promise<boolean> {
+  const supabase = await createClient();
+  const query = supabase.from("fatwas").select("id").eq("number", number);
+  const { data } = ignoreId ? await query.neq("id", ignoreId) : await query;
+  return (data ?? []).length > 0;
+}
+
+export async function isFatwaSlugTaken(slug: string, ignoreId?: number): Promise<boolean> {
+  const supabase = await createClient();
+  const query = supabase.from("fatwas").select("id").eq("slug", slug);
+  const { data } = ignoreId ? await query.neq("id", ignoreId) : await query;
+  return (data ?? []).length > 0;
 }
 
 /** يبني رابطًا فريدًا للفتوى بإضافة لاحقة رقمية عند التكرار. */
-export function uniqueFatwaSlug(base: string, ignoreId?: number): string {
+export async function uniqueFatwaSlug(base: string, ignoreId?: number): Promise<string> {
   const root = base || "fatwa";
   let slug = root;
   let suffix = 2;
-  while (isFatwaSlugTaken(slug, ignoreId)) slug = `${root}-${suffix++}`;
+  while (await isFatwaSlugTaken(slug, ignoreId)) slug = `${root}-${suffix++}`;
   return slug;
-}
-
-export function isFatwaSlugTaken(slug: string, ignoreId?: number): boolean {
-  const row = db()
-    .prepare("SELECT id FROM fatwas WHERE slug = ? AND id != ?")
-    .get(slug, ignoreId ?? 0);
-  return Boolean(row);
 }
 
 export type FatwaInput = {
@@ -222,143 +226,106 @@ export type FatwaInput = {
   audio_duration: string;
   source: string;
   tags: string;
-  published: number;
+  published: boolean;
 };
 
-export function createFatwa(input: FatwaInput): number {
-  const conn = db();
-  const result = conn
-    .prepare(
-      `INSERT INTO fatwas
-        (number, slug, title, question, answer, category_id, audio_url, audio_label,
-         audio_duration, source, tags, published)
-       VALUES
-        (@number, @slug, @title, @question, @answer, @category_id, @audio_url, @audio_label,
-         @audio_duration, @source, @tags, @published)`,
-    )
-    .run(input);
-  const id = Number(result.lastInsertRowid);
-  indexFatwa(conn, { id, ...input });
-  return id;
+export async function createFatwa(input: FatwaInput): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("fatwas").insert(input);
+  if (error) throw new Error(`تعذّر حفظ الفتوى: ${error.message}`);
 }
 
-export function updateFatwa(id: number, input: FatwaInput): void {
-  const conn = db();
-  conn
-    .prepare(
-      `UPDATE fatwas SET
-        number = @number, slug = @slug, title = @title, question = @question, answer = @answer,
-        category_id = @category_id, audio_url = @audio_url, audio_label = @audio_label,
-        audio_duration = @audio_duration, source = @source, tags = @tags, published = @published,
-        updated_at = datetime('now')
-       WHERE id = @id`,
-    )
-    .run({ ...input, id });
-  indexFatwa(conn, { id, ...input });
+export async function updateFatwa(id: number, input: FatwaInput): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("fatwas")
+    .update({ ...input, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw new Error(`تعذّر حفظ التعديلات: ${error.message}`);
 }
 
-export function deleteFatwa(id: number): void {
-  const conn = db();
-  conn.prepare("DELETE FROM fatwas WHERE id = ?").run(id);
-  removeFatwaFromIndex(conn, id);
+export async function deleteFatwa(id: number): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("fatwas").delete().eq("id", id);
+  if (error) throw new Error(`تعذّر حذف الفتوى: ${error.message}`);
 }
 
-export function clearFatwaAudio(id: number): void {
-  db()
-    .prepare(
-      `UPDATE fatwas SET audio_url = '', audio_label = '', audio_duration = '',
-       updated_at = datetime('now') WHERE id = ?`,
-    )
-    .run(id);
-}
-
-export function setFatwaAudio(
+export async function setFatwaAudio(
   id: number,
-  audio: { url: string; label?: string; duration?: string },
-): void {
-  db()
-    .prepare(
-      `UPDATE fatwas SET audio_url = @url, audio_label = @label, audio_duration = @duration,
-       updated_at = datetime('now') WHERE id = @id`,
-    )
-    .run({ id, url: audio.url.trim(), label: audio.label?.trim() ?? "", duration: audio.duration?.trim() ?? "" });
+  audio: { url: string; label?: string; duration?: string; path?: string },
+): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("fatwas")
+    .update({
+      audio_url: audio.url.trim(),
+      audio_label: audio.label?.trim() ?? "",
+      audio_duration: audio.duration?.trim() ?? "",
+      audio_path: audio.path ?? "",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(`تعذّر حفظ التسجيل: ${error.message}`);
+}
+
+export async function clearFatwaAudio(id: number): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("fatwas")
+    .update({
+      audio_url: "",
+      audio_label: "",
+      audio_duration: "",
+      audio_path: "",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(`تعذّر حذف التسجيل: ${error.message}`);
 }
 
 /* ------------------------------ البحث النصي ------------------------------ */
 
 /**
- * بحث نصي داخل الفتاوى باستخدام FTS5 على النص بعد التطبيع،
- * مع تدرّج: مطابقة كل الكلمات ← أي كلمة ← مطابقة جزئية بـ LIKE.
+ * بحث نصي عربي داخل Postgres: تطبيع النص ثم مطابقة full-text
+ * مع تدرّج (كلمات دالّة ← كل الكلمات ← مطابقة تقريبية للأخطاء الإملائية).
  */
-export function searchFatwasText(query: string, limit = 40): Array<FatwaWithCategory & { score: number }> {
-  const conn = db();
+export async function searchFatwasText(
+  query: string,
+  limit = 30,
+): Promise<Array<FatwaWithCategory & { score: number }>> {
   const trimmed = query.trim();
   if (!trimmed) return [];
 
-  // رقم الفتوى: بحث مباشر
-  const asNumber = Number(normalizeArabic(trimmed));
-  if (Number.isInteger(asNumber) && asNumber > 0) {
-    const direct = getFatwaByNumber(asNumber);
-    if (direct) return [{ ...direct, score: 1 }];
-  }
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("search_fatwas", { q: trimmed, max_results: limit });
+  if (error) throw new Error(`تعذّر البحث: ${error.message}`);
 
-  const tokens = tokenize(trimmed);
-  if (tokens.length === 0) return [];
-  const escaped = tokens.map((t) => `"${t.replace(/"/g, '""')}"*`);
+  const rows = (data ?? []) as Array<
+    Omit<FatwaWithCategory, "audio_path"> & { rank: number }
+  >;
+  const best = rows[0]?.rank || 1;
 
-  const runMatch = (matchExpr: string) =>
-    conn
-      .prepare(
-        `SELECT f.*, c.name AS category_name, c.slug AS category_slug,
-                bm25(fatwas_fts, 8.0, 4.0, 1.0, 3.0) AS rank
-         FROM fatwas_fts
-         JOIN fatwas f ON f.id = fatwas_fts.rowid
-         LEFT JOIN categories c ON c.id = f.category_id
-         WHERE fatwas_fts MATCH ? AND f.published = 1
-         ORDER BY rank
-         LIMIT ?`,
-      )
-      .all(matchExpr, limit) as Array<FatwaWithCategory & { rank: number }>;
-
-  let rows: Array<FatwaWithCategory & { rank: number }> = [];
-  try {
-    if (escaped.length > 1) rows = runMatch(escaped.join(" AND "));
-    if (rows.length < 5) {
-      const orRows = runMatch(escaped.join(" OR "));
-      const seen = new Set(rows.map((r) => r.id));
-      rows = [...rows, ...orRows.filter((r) => !seen.has(r.id))];
-    }
-  } catch {
-    rows = [];
-  }
-
-  if (rows.length === 0) {
-    const like = `%${tokens[0]}%`;
-    const fallback = conn
-      .prepare(
-        `${FATWA_SELECT} WHERE f.published = 1 AND (f.title LIKE ? OR f.question LIKE ? OR f.answer LIKE ?)
-         ORDER BY f.number DESC LIMIT ?`,
-      )
-      .all(like, like, like, limit) as FatwaWithCategory[];
-    return fallback.map((row, i) => ({ ...row, score: 0.5 - i * 0.001 }));
-  }
-
-  // bm25 يُرجع قيمًا سالبة، الأصغر أفضل — نحوّلها إلى درجة بين 0 و1.
-  const best = Math.min(...rows.map((r) => r.rank));
-  return rows.slice(0, limit).map((row) => ({
-    ...row,
-    score: best === 0 ? 1 : Math.max(0, Math.min(1, row.rank / best)),
-  }));
+  return rows.map((row) => {
+    const { rank, ...fatwa } = row;
+    return {
+      ...fatwa,
+      audio_path: "",
+      score: best > 0 ? Math.max(0, Math.min(1, rank / best)) : 0,
+    };
+  });
 }
 
 /* --------------------------------- الكتب --------------------------------- */
 
-export function listBooks(): Book[] {
-  return db().prepare("SELECT * FROM books ORDER BY sort_order ASC, id ASC").all() as Book[];
-}
-
-export function getBook(id: number): Book | null {
-  return (db().prepare("SELECT * FROM books WHERE id = ?").get(id) as Book) ?? null;
+export async function listBooks(): Promise<Book[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("books")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("id", { ascending: true });
+  if (error) throw new Error(`تعذّر جلب المؤلفات: ${error.message}`);
+  return data ?? [];
 }
 
 export type BookInput = {
@@ -371,70 +338,120 @@ export type BookInput = {
   sort_order: number;
 };
 
-export function createBook(input: BookInput): number {
-  const result = db()
-    .prepare(
-      `INSERT INTO books (title, description, year, publisher, volumes, link_url, sort_order)
-       VALUES (@title, @description, @year, @publisher, @volumes, @link_url, @sort_order)`,
-    )
-    .run(input);
-  return Number(result.lastInsertRowid);
+export async function createBook(input: BookInput): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("books").insert(input);
+  if (error) throw new Error(`تعذّر إضافة الكتاب: ${error.message}`);
 }
 
-export function updateBook(id: number, input: BookInput): void {
-  db()
-    .prepare(
-      `UPDATE books SET title = @title, description = @description, year = @year,
-       publisher = @publisher, volumes = @volumes, link_url = @link_url, sort_order = @sort_order
-       WHERE id = @id`,
-    )
-    .run({ ...input, id });
+export async function updateBook(id: number, input: BookInput): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("books").update(input).eq("id", id);
+  if (error) throw new Error(`تعذّر حفظ الكتاب: ${error.message}`);
 }
 
-export function deleteBook(id: number): void {
-  db().prepare("DELETE FROM books WHERE id = ?").run(id);
+export async function deleteBook(id: number): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("books").delete().eq("id", id);
+  if (error) throw new Error(`تعذّر حذف الكتاب: ${error.message}`);
 }
 
 /* ------------------------------- الإعدادات ------------------------------- */
 
-export function getSettings(): Record<string, string> {
-  const rows = db().prepare("SELECT key, value FROM settings").all() as Array<{
-    key: string;
-    value: string;
-  }>;
-  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+export const getSettings = cache(async (): Promise<Record<string, string>> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("settings").select("key, value");
+  if (error) throw new Error(`تعذّر جلب إعدادات الموقع: ${error.message}`);
+  return Object.fromEntries((data ?? []).map((row) => [row.key, row.value]));
+});
+
+export async function saveSettings(values: Record<string, string>): Promise<void> {
+  const supabase = await createClient();
+  const rows = Object.entries(values).map(([key, value]) => ({
+    key,
+    value,
+    updated_at: new Date().toISOString(),
+  }));
+  const { error } = await supabase.from("settings").upsert(rows, { onConflict: "key" });
+  if (error) throw new Error(`تعذّر حفظ الإعدادات: ${error.message}`);
 }
 
-export function getSetting(key: string, fallback = ""): string {
-  const row = db().prepare("SELECT value FROM settings WHERE key = ?").get(key) as
-    | { value: string }
-    | undefined;
-  return row?.value ?? fallback;
-}
+/* ------------------------------ إحصائيات ------------------------------ */
 
-export function saveSettings(values: Record<string, string>): void {
-  const stmt = db().prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-  );
-  db().transaction(() => {
-    for (const [key, value] of Object.entries(values)) stmt.run(key, value);
-  })();
-}
+export async function getStats() {
+  const supabase = await createClient();
+  const head = { count: "exact" as const, head: true };
 
-/* ------------------------------- إحصائيات ------------------------------- */
+  const [fatwas, categories, books, published, withAudio, viewsRows] = await Promise.all([
+    supabase.from("fatwas").select("id", head),
+    supabase.from("categories").select("id", head),
+    supabase.from("books").select("id", head),
+    supabase.from("fatwas").select("id", head).eq("published", true),
+    supabase.from("fatwas").select("id", head).neq("audio_url", ""),
+    supabase.from("fatwas").select("views"),
+  ]);
 
-export function getStats() {
-  const conn = db();
-  const one = (sql: string) => (conn.prepare(sql).get() as { value: number }).value;
+  const views = (viewsRows.data ?? []).reduce((total, row) => total + (row.views ?? 0), 0);
+
   return {
-    fatwas: one("SELECT COUNT(*) AS value FROM fatwas"),
-    published: one("SELECT COUNT(*) AS value FROM fatwas WHERE published = 1"),
-    withAudio: one("SELECT COUNT(*) AS value FROM fatwas WHERE audio_url != ''"),
-    categories: one("SELECT COUNT(*) AS value FROM categories"),
-    books: one("SELECT COUNT(*) AS value FROM books"),
-    views: one("SELECT COALESCE(SUM(views), 0) AS value FROM fatwas"),
+    fatwas: fatwas.count ?? 0,
+    categories: categories.count ?? 0,
+    books: books.count ?? 0,
+    published: published.count ?? 0,
+    withAudio: withAudio.count ?? 0,
+    views,
   };
 }
 
-export type { Fatwa };
+/* --------------------------- الفتاوى المحفوظة --------------------------- */
+
+export async function listSavedFatwas(): Promise<FatwaWithCategory[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("saved_fatwas")
+    .select(`created_at, fatwas (${FATWA_SELECT})`)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`تعذّر جلب المحفوظات: ${error.message}`);
+
+  return (data ?? [])
+    .map((row) => (row as unknown as { fatwas: FatwaRow | null }).fatwas)
+    .filter((fatwa): fatwa is FatwaRow => Boolean(fatwa))
+    .map(mapFatwa);
+}
+
+export async function getSavedFatwaIds(): Promise<number[]> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("saved_fatwas").select("fatwa_id");
+  return (data ?? []).map((row) => row.fatwa_id as number);
+}
+
+export async function isFatwaSaved(fatwaId: number): Promise<boolean> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("saved_fatwas")
+    .select("fatwa_id")
+    .eq("fatwa_id", fatwaId)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+export async function saveFatwa(userId: string, fatwaId: number): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("saved_fatwas")
+    .upsert({ user_id: userId, fatwa_id: fatwaId }, { onConflict: "user_id,fatwa_id" });
+  if (error) throw new Error(`تعذّر حفظ الفتوى: ${error.message}`);
+}
+
+export async function unsaveFatwa(fatwaId: number): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("saved_fatwas").delete().eq("fatwa_id", fatwaId);
+  if (error) throw new Error(`تعذّر إزالة الفتوى: ${error.message}`);
+}
+
+export async function clearSavedFatwas(userId: string): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("saved_fatwas").delete().eq("user_id", userId);
+  if (error) throw new Error(`تعذّر مسح المحفوظات: ${error.message}`);
+}

@@ -20,14 +20,11 @@ export default async function AdminFatwasPage(props: PageProps<"/admin/fatwas">)
 
   const search = (pick("search") ?? "").trim();
   const page = Math.max(1, Number(pick("page")) || 1);
-  const total = countFatwas({ includeUnpublished: true, search });
+  const [total, fatwas] = await Promise.all([
+    countFatwas({ includeUnpublished: true, search }),
+    listFatwas({ includeUnpublished: true, search, limit: PER_PAGE, offset: (page - 1) * PER_PAGE }),
+  ]);
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const fatwas = listFatwas({
-    includeUnpublished: true,
-    search,
-    limit: PER_PAGE,
-    offset: (page - 1) * PER_PAGE,
-  });
 
   const buildHref = (p: number) =>
     `/admin/fatwas?page=${p}${search ? `&search=${encodeURIComponent(search)}` : ""}`;

@@ -8,9 +8,8 @@ export const metadata: Metadata = {
   description: "قائمة بأسماء كتب ومؤلفات الشيخ مصطفى العدوي.",
 };
 
-export default function BooksPage() {
-  const books = listBooks();
-  const settings = getSettings();
+export default async function BooksPage() {
+  const [books, settings] = await Promise.all([listBooks(), getSettings()]);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">

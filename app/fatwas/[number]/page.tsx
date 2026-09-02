@@ -3,7 +3,8 @@ import Link from "next/link";
 import FatwaActions from "@/components/fatwa-actions";
 import FatwaCard from "@/components/fatwa-card";
 import PermalinkBox from "@/components/permalink-box";
-import { getFatwaByNumber, incrementFatwaViews, listFatwas, getSettings } from "@/lib/data";
+import { getFatwaByNumber, incrementFatwaViews, listFatwas, getSettings, isFatwaSaved } from "@/lib/data";
+import { getCurrentUser } from "@/lib/auth";
 import { truncate } from "@/lib/arabic";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ function parseNumber(raw: string): number | null {
 export async function generateMetadata(props: PageProps<"/fatwas/[number]">) {
   const { number } = await props.params;
   const parsed = parseNumber(number);
-  const fatwa = parsed ? getFatwaByNumber(parsed) : null;
+  const fatwa = parsed ? await getFatwaByNumber(parsed) : null;
   if (!fatwa) return { title: "فتوى غير موجودة" };
 
   return {
@@ -34,15 +35,17 @@ export async function generateMetadata(props: PageProps<"/fatwas/[number]">) {
 export default async function FatwaPage(props: PageProps<"/fatwas/[number]">) {
   const { number } = await props.params;
   const parsed = parseNumber(number);
-  const fatwa = parsed ? getFatwaByNumber(parsed) : null;
+  const fatwa = parsed ? await getFatwaByNumber(parsed) : null;
   if (!fatwa) notFound();
 
-  incrementFatwaViews(fatwa.id);
-  const settings = getSettings();
-  const related = listFatwas({
-    categorySlug: fatwa.category_slug ?? undefined,
-    limit: 5,
-  }).filter((item) => item.id !== fatwa.id).slice(0, 4);
+  const user = await getCurrentUser();
+  const [settings, relatedAll, saved] = await Promise.all([
+    getSettings(),
+    listFatwas({ categorySlug: fatwa.category_slug ?? undefined, limit: 5 }),
+    user ? isFatwaSaved(fatwa.id) : Promise.resolve(false),
+    incrementFatwaViews(fatwa.number),
+  ]);
+  const related = relatedAll.filter((item) => item.id !== fatwa.id).slice(0, 4);
 
   const tags = fatwa.tags.split(",").map((t) => t.trim()).filter(Boolean);
   const path = `/fatwas/${fatwa.number}`;
@@ -123,6 +126,9 @@ export default async function FatwaPage(props: PageProps<"/fatwas/[number]">) {
 
         <div className="mt-8 border-t border-line pt-5">
           <FatwaActions
+            fatwaId={fatwa.id}
+            isLoggedIn={Boolean(user)}
+            initiallySaved={saved}
             number={fatwa.number}
             title={fatwa.title}
             question={fatwa.question}

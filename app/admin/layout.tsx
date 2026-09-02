@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { isAdmin, isUsingDefaultPassword } from "@/lib/auth";
-import { logoutAction } from "./actions";
+import { getCurrentUser, isAdmin } from "@/lib/auth";
+import { signOutAction } from "@/app/auth-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -15,29 +15,28 @@ const LINKS = [
 ];
 
 export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
-  // صفحة تسجيل الدخول تستخدم هذا التخطيط أيضًا، فتُعرض دون القائمة الجانبية.
-  if (!(await isAdmin())) return <>{children}</>;
+  const [user, admin] = await Promise.all([getCurrentUser(), isAdmin()]);
+  // صفحة «لا صلاحية» تستخدم هذا التخطيط أيضًا، فتُعرض دون القائمة الجانبية.
+  if (!admin) return <>{children}</>;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">⚙️ إدارة المكتبة</h1>
-        <form action={logoutAction}>
-          <button
-            type="submit"
-            className="rounded-lg border border-line px-3 py-2 text-sm transition hover:border-danger hover:text-danger"
-          >
-            تسجيل الخروج
-          </button>
-        </form>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted" dir="ltr">
+            {user?.email}
+          </span>
+          <form action={signOutAction}>
+            <button
+              type="submit"
+              className="rounded-lg border border-line px-3 py-2 text-sm transition hover:border-danger hover:text-danger"
+            >
+              تسجيل الخروج
+            </button>
+          </form>
+        </div>
       </div>
-
-      {isUsingDefaultPassword() ? (
-        <p className="mb-6 rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm">
-          ⚠️ لم تُضبط كلمة مرور اللوحة. اضبط <code className="font-mono">ADMIN_PASSWORD</code> و
-          <code className="font-mono"> ADMIN_SESSION_SECRET</code> في ملف البيئة قبل النشر.
-        </p>
-      ) : null}
 
       <div className="grid gap-6 md:grid-cols-[220px_1fr]">
         <nav className="h-fit rounded-2xl border border-line bg-surface p-2 text-sm">

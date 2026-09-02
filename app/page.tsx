@@ -6,12 +6,15 @@ import { isAiSearchEnabled } from "@/lib/ai-search";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
-  const settings = getSettings();
-  const categories = listCategories();
-  const latest = listFatwas({ limit: 6 });
-  const stats = getStats();
-  const books = listBooks().slice(0, 4);
+export default async function HomePage() {
+  const [settings, categories, latest, stats, allBooks] = await Promise.all([
+    getSettings(),
+    listCategories(),
+    listFatwas({ limit: 6 }),
+    getStats(),
+    listBooks(),
+  ]);
+  const books = allBooks.slice(0, 4);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">

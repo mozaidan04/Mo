@@ -9,8 +9,8 @@ export const metadata: Metadata = {
   description: "تصفّح الفتاوى حسب الأبواب الفقهية.",
 };
 
-export default function CategoriesPage() {
-  const categories = listCategories();
+export default async function CategoriesPage() {
+  const categories = await listCategories();
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">

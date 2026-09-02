@@ -41,7 +41,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# قاعدة البيانات والملفات المرفوعة
-/data/*.db
-/data/*.db-*
-/data/uploads/
+# قاعدة البيانات المحلية القديمة (لم تعد مستخدمة)
+/data/

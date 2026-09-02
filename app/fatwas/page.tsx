@@ -17,9 +17,11 @@ export default async function FatwasPage(props: PageProps<"/fatwas">) {
   const rawPage = Array.isArray(searchParams.page) ? searchParams.page[0] : searchParams.page;
   const page = Math.max(1, Number(rawPage) || 1);
 
-  const total = countFatwas();
+  const [total, fatwas] = await Promise.all([
+    countFatwas(),
+    listFatwas({ limit: PER_PAGE, offset: (page - 1) * PER_PAGE }),
+  ]);
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const fatwas = listFatwas({ limit: PER_PAGE, offset: (page - 1) * PER_PAGE });
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">

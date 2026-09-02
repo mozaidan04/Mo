@@ -10,7 +10,7 @@ const PER_PAGE = 12;
 
 export async function generateMetadata(props: PageProps<"/categories/[slug]">) {
   const { slug } = await props.params;
-  const category = getCategoryBySlug(slug);
+  const category = await getCategoryBySlug(slug);
   if (!category) return { title: "تصنيف غير موجود" };
   return { title: category.name, description: category.description };
 }
@@ -18,14 +18,16 @@ export async function generateMetadata(props: PageProps<"/categories/[slug]">) {
 export default async function CategoryPage(props: PageProps<"/categories/[slug]">) {
   const { slug } = await props.params;
   const searchParams = await props.searchParams;
-  const category = getCategoryBySlug(slug);
+  const category = await getCategoryBySlug(slug);
   if (!category) notFound();
 
   const rawPage = Array.isArray(searchParams.page) ? searchParams.page[0] : searchParams.page;
   const page = Math.max(1, Number(rawPage) || 1);
-  const total = countFatwas({ categorySlug: slug });
+  const [total, fatwas] = await Promise.all([
+    countFatwas({ categorySlug: slug }),
+    listFatwas({ categorySlug: slug, limit: PER_PAGE, offset: (page - 1) * PER_PAGE }),
+  ]);
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const fatwas = listFatwas({ categorySlug: slug, limit: PER_PAGE, offset: (page - 1) * PER_PAGE });
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">

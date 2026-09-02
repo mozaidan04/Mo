@@ -20,13 +20,11 @@ export default async function AdminLinksPage(props: PageProps<"/admin/links">) {
 
   const search = (pick("search") ?? "").trim();
   const page = Math.max(1, Number(pick("page")) || 1);
-  const total = countFatwas({ includeUnpublished: true, search });
-  const fatwas = listFatwas({
-    includeUnpublished: true,
-    search,
-    limit: PER_PAGE,
-    offset: (page - 1) * PER_PAGE,
-  });
+  const [total, fatwas, suggestedNumber] = await Promise.all([
+    countFatwas({ includeUnpublished: true, search }),
+    listFatwas({ includeUnpublished: true, search, limit: PER_PAGE, offset: (page - 1) * PER_PAGE }),
+    nextFatwaNumber(),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -35,7 +33,7 @@ export default async function AdminLinksPage(props: PageProps<"/admin/links">) {
         <p className="mt-1 text-sm text-muted">
           لكل فتوى رقم فريد ورابط مستقل على الصورة <code className="font-mono">/fatwas/الرقم</code>،
           ورابط مختصر <code className="font-mono">/f/الرقم</code>. الرقم التالي المقترح:{" "}
-          <strong className="text-primary">{nextFatwaNumber()}</strong>
+          <strong className="text-primary">{suggestedNumber}</strong>
         </p>
       </div>
 

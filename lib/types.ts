@@ -21,9 +21,11 @@ export type Fatwa = {
   audio_url: string;
   audio_label: string;
   audio_duration: string;
+  /** مسار الملف داخل مخزن Supabase عند رفعه من اللوحة (فارغ للروابط الخارجية). */
+  audio_path: string;
   source: string;
   tags: string;
-  published: number;
+  published: boolean;
   views: number;
   created_at: string;
   updated_at: string;

@@ -8,8 +8,10 @@ export const dynamic = "force-dynamic";
 export default async function AdminDashboard() {
   await requireAdmin();
 
-  const stats = getStats();
-  const recent = listFatwas({ includeUnpublished: true, limit: 5 });
+  const [stats, recent] = await Promise.all([
+    getStats(),
+    listFatwas({ includeUnpublished: true, limit: 5 }),
+  ]);
 
   const cards = [
     { label: "إجمالي الفتاوى", value: stats.fatwas, href: "/admin/fatwas" },

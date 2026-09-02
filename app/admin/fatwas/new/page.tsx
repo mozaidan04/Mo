@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 export default async function NewFatwaPage() {
   await requireAdmin();
+  const [categories, suggestedNumber] = await Promise.all([listCategories(), nextFatwaNumber()]);
 
   return (
     <div className="space-y-5">
@@ -19,8 +20,8 @@ export default async function NewFatwaPage() {
       <div className="rounded-2xl border border-line bg-surface p-5">
         <FatwaForm
           action={createFatwaAction}
-          categories={listCategories()}
-          suggestedNumber={nextFatwaNumber()}
+          categories={categories}
+          suggestedNumber={suggestedNumber}
           submitLabel="حفظ الفتوى"
         />
       </div>

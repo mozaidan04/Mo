@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export default async function EditFatwaPage(props: PageProps<"/admin/fatwas/[id]">) {
   await requireAdmin();
   const { id } = await props.params;
-  const fatwa = getFatwaById(Number(id));
+  const [fatwa, categories] = await Promise.all([getFatwaById(Number(id)), listCategories()]);
   if (!fatwa) notFound();
 
   return (
@@ -40,7 +40,7 @@ export default async function EditFatwaPage(props: PageProps<"/admin/fatwas/[id]
       <div className="rounded-2xl border border-line bg-surface p-5">
         <FatwaForm
           action={updateFatwaAction}
-          categories={listCategories()}
+          categories={categories}
           fatwa={fatwa}
           submitLabel="حفظ التعديلات"
         />

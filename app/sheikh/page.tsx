@@ -9,10 +9,8 @@ export const metadata: Metadata = {
   description: "تعريف مختصر بالشيخ مصطفى العدوي.",
 };
 
-export default function SheikhPage() {
-  const settings = getSettings();
-  const books = listBooks();
-  const stats = getStats();
+export default async function SheikhPage() {
+  const [settings, books, stats] = await Promise.all([getSettings(), listBooks(), getStats()]);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">

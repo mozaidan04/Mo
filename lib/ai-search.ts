@@ -51,7 +51,7 @@ export async function searchFatwas(query: string): Promise<SearchResponse> {
   const trimmed = query.trim();
   if (!trimmed) return { query: trimmed, summary: null, hits: [], mode: "text" };
 
-  const candidates = searchFatwasText(trimmed, CANDIDATE_LIMIT);
+  const candidates = await searchFatwasText(trimmed, CANDIDATE_LIMIT);
   const textHits: SearchHit[] = candidates
     .slice(0, RESULT_LIMIT)
     .map(({ score, ...fatwa }) => ({ fatwa, score }));

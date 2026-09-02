@@ -1,83 +1,48 @@
 import "server-only";
-import { cookies } from "next/headers";
-import crypto from "node:crypto";
+import { cache } from "react";
+import { redirect } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
+import { createClient } from "./supabase/server";
 
-const COOKIE_NAME = "fatawa_admin";
-const MAX_AGE_SECONDS = 60 * 60 * 12; // 12 ساعة
+/** المستخدم الحالي أو null. يُتحقَّق من الرمز مع خادم Supabase وليس من الكوكي وحده. */
+export const getCurrentUser = cache(async (): Promise<User | null> => {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getUser();
+  return data.user ?? null;
+});
 
-function sessionSecret(): string {
-  return (
-    process.env.ADMIN_SESSION_SECRET ||
-    process.env.ADMIN_PASSWORD ||
-    "fatawa-development-secret"
-  );
+/**
+ * هل المستخدم الحالي مشرف؟
+ * المصدر الوحيد للحقيقة هو جدول admins في قاعدة البيانات،
+ * لأن سياسات RLS هي ما يحمي الكتابة فعليًا — وقائمة البُرد غير مقروءة لغير المشرفين.
+ */
+export const isAdmin = cache(async (): Promise<boolean> => {
+  const user = await getCurrentUser();
+  if (!user) return false;
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("is_admin");
+  if (error) return false;
+  return data === true;
+});
+
+/** يُستدعى في كل صفحة داخل /admin. */
+export async function requireAdmin(): Promise<User> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login?next=%2Fadmin");
+  if (!(await isAdmin())) redirect("/admin/no-access");
+  return user;
 }
 
-function adminPassword(): string {
-  // في بيئة التطوير فقط تُستخدم كلمة مرور افتراضية.
-  return process.env.ADMIN_PASSWORD || "admin";
+/** يُستدعى في الصفحات التي تتطلب حسابًا (مثل الفتاوى المحفوظة). */
+export async function requireUser(nextPath: string): Promise<User> {
+  const user = await getCurrentUser();
+  if (!user) redirect(`/login?next=${encodeURIComponent(nextPath)}`);
+  return user;
 }
 
-function sign(payload: string): string {
-  return crypto.createHmac("sha256", sessionSecret()).update(payload).digest("hex");
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-/** التحقق من كلمة مرور لوحة التحكم. */
-export function verifyPassword(password: string): boolean {
-  return safeEqual(password, adminPassword());
-}
-
-/** قيمة الكوكي: تاريخ الانتهاء + توقيع HMAC. */
-function buildToken(): string {
-  const expiresAt = Date.now() + MAX_AGE_SECONDS * 1000;
-  return `${expiresAt}.${sign(String(expiresAt))}`;
-}
-
-function isValidToken(token: string | undefined): boolean {
-  if (!token) return false;
-  const [expiresAt, signature] = token.split(".");
-  if (!expiresAt || !signature) return false;
-  if (!safeEqual(signature, sign(expiresAt))) return false;
-  return Number(expiresAt) > Date.now();
-}
-
-export async function createAdminSession(): Promise<void> {
-  const store = await cookies();
-  store.set(COOKIE_NAME, buildToken(), {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: MAX_AGE_SECONDS,
-  });
-}
-
-export async function destroyAdminSession(): Promise<void> {
-  const store = await cookies();
-  store.delete(COOKIE_NAME);
-}
-
-export async function isAdmin(): Promise<boolean> {
-  const store = await cookies();
-  return isValidToken(store.get(COOKIE_NAME)?.value);
-}
-
-/** يُستخدم في كل صفحة وإجراء داخل /admin. */
-export async function requireAdmin(): Promise<void> {
-  if (!(await isAdmin())) {
-    const { redirect } = await import("next/navigation");
-    redirect("/admin/login");
-  }
-}
-
-/** هل ما زالت كلمة المرور الافتراضية مستخدمة؟ لعرض تحذير في اللوحة. */
-export function isUsingDefaultPassword(): boolean {
-  return !process.env.ADMIN_PASSWORD;
+/** الاسم المعروض للمستخدم في الترويسة. */
+export function displayName(user: User): string {
+  const name = user.user_metadata?.full_name ?? user.user_metadata?.name;
+  if (typeof name === "string" && name.trim()) return name.trim();
+  return user.email ?? "حسابي";
 }
